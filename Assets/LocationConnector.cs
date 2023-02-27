@@ -26,8 +26,95 @@ public class LocationConnector : MonoBehaviour
         GameObject newJoin = Instantiate(connectionPref, spawnLocation, Quaternion.Euler(0, 0, angle));
         newJoin.transform.localScale = new Vector3(distance, 0.1f, 1);
         newJoin.name = one.name + "-" + two.name;
+        newJoin.GetComponent<JointData>().locationOne = one;
+        newJoin.GetComponent<JointData>().locationTwo = two;
         spawner.AddJoin(newJoin);
         joins.Add(newJoin);
+    }
+
+    //Disconnect by connections
+    private void Disconnect(GameObject one, GameObject two)
+    {
+        GameObject searchJoin = GameObject.Find(one.name + "-" + two.name);
+        if (searchJoin == null) GameObject.Find(two.name + "-" + one.name);
+        if (searchJoin == null) return;
+
+        joins.Remove(searchJoin);
+        one.GetComponent<LocationData>().connections.Remove(two);
+        two.GetComponent<LocationData>().connections.Remove(one);
+        Destroy(searchJoin);
+    }
+
+    //Disconnect by join
+    private void Disconnect(GameObject join)
+    {
+        GameObject one = GameObject.Find(join.name.Split('-')[0]);
+        GameObject two = GameObject.Find(join.name.Split('-')[0]);
+
+        joins.Remove(join);
+        one.GetComponent<LocationData>().connections.Remove(two);
+        two.GetComponent<LocationData>().connections.Remove(one);
+        Destroy(join);
+    }
+    
+    List<GameObject> leftoverLocations = new List<GameObject>();
+    public void LoopTwo()
+    {
+        float intDistance = float.MaxValue;
+        GameObject intJoint = null;
+        GameObject left = null;
+
+        //Get shortest distances for all locations
+        foreach (GameObject l in leftoverLocations)
+        {
+            Vector3 posLeft = l.transform.position;
+
+            foreach (GameObject j in joins)
+            {
+                float angle = j.transform.rotation.z;
+                Vector3 posOne = j.GetComponent<JointData>().locationOne.transform.position;
+                Vector3 posTwo = j.GetComponent<JointData>().locationTwo.transform.position;
+
+                float slope = (posOne.y - posTwo.y) / (posOne.x - posTwo.x);
+                float slopei = -1 / slope;
+
+                float b = posTwo.y - (slope * posTwo.x);
+                float bi = posLeft.y - (slopei * posLeft.x);
+
+                float x = (bi - b) / (slope + (1 / slope));
+                float y = (slope * x) + b;
+                Vector3 pos = new Vector3(x, y, 0);
+
+                if (x < posOne.x && x < posTwo.x)
+                {
+                    if (posOne.x < posTwo.x) { pos = posOne; Debug.Log("Pos = posOne"); }
+                    else { pos = posTwo; Debug.Log("Pos = posOne"); }
+                }
+                else if (x > posOne.x && x > posTwo.x)
+                {
+                    if (posOne.x > posTwo.x) { pos = posOne; Debug.Log("Pos = posOne"); }
+                    else { pos = posTwo; Debug.Log("Pos = posOne"); }
+                }
+
+                float dist = Vector3.Distance(l.transform.position, pos);
+                if (intDistance > dist)
+                {
+                    intDistance = dist;
+                    intJoint = j;
+                    left = l;
+                }
+            }
+        }
+
+        Debug.Log(intJoint.name);
+        GameObject joinOne = intJoint.GetComponent<JointData>().locationOne;
+        GameObject joinTwo = intJoint.GetComponent<JointData>().locationTwo;
+
+        Disconnect(intJoint);
+        Connect(joinOne, left);
+        Connect(left, joinTwo);
+
+        leftoverLocations.Remove(left);
     }
 
     //Searches for the closest point and joins them together
@@ -63,10 +150,13 @@ public class LocationConnector : MonoBehaviour
         //Join last location with first location, only one possible
         Connect(pointer, start);
     }
-    
+
     //Cool maybe?
     private void NewSearch(List<GameObject> locations)
     {
+        leftoverLocations = locations;
+        joins.Clear();
+
         //Find center and add object for clarity
         Vector3 center = Vector3.zero;
         foreach (GameObject l in locations)
@@ -86,48 +176,162 @@ public class LocationConnector : MonoBehaviour
                 furthestLocation = l;
             }
         }
+
+        //Pointers to important locations
         GameObject start = furthestLocation;
         GameObject pointer = start;
+        GameObject previous = null;
+
+        //Loop 0.5
+        //Find and connect second point to first via highest angle from center. Init previous variable
+        List<GameObject> tempLocations = new List<GameObject>(locations);
+        //List<GameObject> leftoverLocations = new List<GameObject>(locations);
+
+        float closestStart = 0;
+        GameObject pointerClosest = null;
+        Transform pointerTransform = pointer.transform;
+        foreach (GameObject l in tempLocations)
+        {
+            if (l.name != pointer.name)
+            {
+                Transform t2 = l.transform;
+
+                Vector3 v1 = t2.position - pointerTransform.position;
+                Vector3 v2 = center - pointerTransform.position;
+
+                float m1 = Vector3.Magnitude(v1);
+                float m2 = Vector3.Magnitude(v2);
+
+                float t = Mathf.Acos(Vector3.Dot(v1, v2) / (m1 * m2));
+
+                if (t > closestStart)
+                {
+                    pointerClosest = l;
+                    closestStart = t;
+                }
+            }
+        }
+
+        Connect(pointer, pointerClosest);
+        if (pointer.name != start.name)
+        {
+            tempLocations.Remove(pointer);
+            leftoverLocations.Remove(pointer);
+        }
+        previous = pointer;
+        pointer = pointerClosest;
+        //End Loop 0.5
 
         //Loop 1: Connect outer most locations
-        List<GameObject> tempLocations = new List<GameObject>(locations);
-        for (int sData = start.GetComponent<LocationData>().connections.Count; sData < 2; )
+        for (int sData = start.GetComponent<LocationData>().connections.Count; sData < 2; sData = start.GetComponent<LocationData>().connections.Count)
         {
-            float closest = 2;
+            float closest = 0;
             GameObject closestLocation = null;
-            Debug.Log("~Pointer: " + pointer.name);
-
-            if (pointer.name != start.name) tempLocations.Remove(pointer);
+            tempLocations.Remove(pointer);
+            leftoverLocations.Remove(pointer);
 
             string s = "Pointer List: ";
             foreach (GameObject l in pointer.GetComponent<LocationData>().connections)
                 s += l.name + " ";
             Debug.Log(s);
 
-            Transform t1 = pointer.transform;
+            Vector3 v1 = previous.transform.position - pointer.transform.position;
             foreach (GameObject l in tempLocations)
             {
-                if (l.GetComponent<LocationData>().connections.Count < 2 && l.name != pointer.name /* && pointer.GetComponent<LocationData>().connections.ElementAt(0).name == l.name*/)
+                if (l.GetComponent<LocationData>().connections.Count < 2 && l.name != pointer.name && (pointer == start ? true : pointer.GetComponent<LocationData>().connections.ElementAt(0).name != l.name))
                 {
-                    Transform t2 = l.transform;
+                    //Debug.Log(l.name + " | " + pointer.name);
+                    Vector3 v2 = l.transform.position - pointer.transform.position;
 
-                    float t = Vector3.Dot(Vector3.Normalize(t1.position - t2.position), Vector3.Normalize(t1.position - center));
-                    if (t < closest)
+                    float m1 = Vector3.Magnitude(v1);
+                    float m2 = Vector3.Magnitude(v2);
+
+                    float t = Mathf.Acos(Vector3.Dot(v1, v2) / (m1 * m2));
+                    //Debug.Log(t1.name + " to " + t2.name + " Centered: " + t);
+
+                    if (t > closest)
                     {
                         closestLocation = l;
-                        Debug.Log("New Closest: " + closestLocation.name);
+                        //Debug.Log("New Closest: " + closestLocation.name);
                         closest = t;
                     }
                 }
             }
 
             Connect(pointer, closestLocation);
-            if (pointer.name != start.name) tempLocations.Remove(pointer);
+            if (pointer.name != start.name)
+            {
+                tempLocations.Remove(pointer);
+                leftoverLocations.Remove(pointer);
+            }
+            previous = pointer;
             pointer = closestLocation;
-            Debug.Log("New Pointer: " + pointer.name);
+            //Debug.Log("New Pointer: " + pointer.name);
         }
-
+        leftoverLocations.Remove(start);
+        //End Loop 1
+        /*
         //Loop 2: Attempt to join via closest location to any edge until no locations left
+        while (leftoverLocations.Count > 0)
+        //for (int i = 0; i < 2; i++)
+        {
+            float intDistance = float.MaxValue;
+            GameObject intJoint = null;
+            GameObject left = null;
+
+            //Get shortest distances for all locations
+            foreach (GameObject l in leftoverLocations)
+            {
+                Vector3 posLeft = l.transform.position;
+
+                foreach (GameObject j in joins)
+                {
+                    float angle = j.transform.rotation.z;
+                    Vector3 posOne = j.GetComponent<JointData>().locationOne.transform.position;
+                    Vector3 posTwo = j.GetComponent<JointData>().locationTwo.transform.position;
+
+                    float slope = (posOne.y - posTwo.y) / (posOne.x - posTwo.x);
+                    float slopei = -1 / slope;
+
+                    float b = posTwo.y - (slope * posTwo.x);
+                    float bi = posLeft.y - (slopei * posLeft.x);
+
+                    float x = (bi - b) / (slope + (1 / slope));
+                    float y = (slope * x) + b;
+                    Vector3 pos = new Vector3(x, y, 0);
+                    
+                    if (x < posOne.x && x < posTwo.x)
+                    {
+                        if (posOne.x < posTwo.x) { pos = posOne; Debug.Log("Pos = posOne"); }
+                        else { pos = posTwo; Debug.Log("Pos = posOne"); }
+                    }
+                    else if (x > posOne.x && x > posTwo.x)
+                    {
+                        if (posOne.x > posTwo.x) { pos = posOne; Debug.Log("Pos = posOne"); }
+                        else { pos = posTwo; Debug.Log("Pos = posOne"); }
+                    }
+
+                    float dist = Vector3.Distance(l.transform.position, pos);
+                    if (intDistance > dist)
+                    {
+                        intDistance = dist;
+                        intJoint = j;
+                        left = l;
+                    }
+                }
+            }
+
+            Debug.Log(intJoint.name);
+            GameObject joinOne = intJoint.GetComponent<JointData>().locationOne;
+            GameObject joinTwo = intJoint.GetComponent<JointData>().locationTwo;
+
+            Disconnect(intJoint);
+            Connect(joinOne, left);
+            Connect(left, joinTwo);
+
+            leftoverLocations.Remove(left);
+        }
+        */
     }
 
     public void ConnectLocations(List<GameObject> l)
